@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: synthetic-event-trial
+    runtime: python
+    plan: free
+    buildCommand: python -m unittest discover -v
+    startCommand: python render_server.py
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: TRIAL_EXPIRES_AT
+        sync: false
