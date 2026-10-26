@@ -220,7 +220,7 @@ class Trial:
             if old_key and old_key != key:
                 self.subscription.update(old_key=old_key, rotation_until=time.time()+10)
             self.stage = 'subscribed_waiting_to_send'
-            if self.event is None and self.timer is None:
+            if self.auto_delay is not None and self.event is None and self.timer is None:
                 self.timer = threading.Timer(self.auto_delay, self.emit)
                 self.timer.daemon = True
                 self.timer.start()
@@ -235,9 +235,15 @@ class Trial:
                 return
             if not self.subscription or time.time() >= self.subscription['expiry'] or self.event:
                 return
-            self.event = {'eventId': 'evt_'+secrets.token_hex(16), 'name': EVENT,
-                          'timestamp': iso(time.time()), 'data': {'marker': 'SYNTHETIC_'+secrets.token_hex(8)}, 'cursor': None}
+            self.event = self.make_event()
             event = self.event
+        self.deliver(event)
+
+    def make_event(self):
+        return {'eventId': 'evt_'+secrets.token_hex(16), 'name': EVENT,
+                          'timestamp': iso(time.time()), 'data': {'marker': getattr(self, 'trigger_marker', None) or 'SYNTHETIC_'+secrets.token_hex(8)}, 'cursor': None}
+
+    def deliver(self, event):
         for attempt in range(3):
             with self.lock:
                 if self.stopped.is_set() or time.monotonic() >= self.deadline or not self.subscription or time.time() >= self.subscription['expiry']:

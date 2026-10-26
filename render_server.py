@@ -36,8 +36,8 @@ def make_handler(trial):
             elif self.path == '/status':
                 # Deliberately exclude marker, event ID, methods and callback URL.
                 status = trial.status()
-                self.send(200, core.encode({key: status[key] for key in
-                    ('stage', 'remaining_seconds', 'callback_verified', 'delivery_http_status')}))
+                self.send(200, core.encode({key: status.get(key) for key in
+                    ('stage', 'remaining_seconds', 'callback_verified', 'delivery_http_status', 'subscription_id')}))
             elif self.path == '/mcp':
                 self.send(405)
             else:
