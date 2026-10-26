@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: synthetic-event-trial
+    name: dot-event-test
     runtime: python
     plan: free
-    buildCommand: python -m unittest test_v2 -v
-    startCommand: python probe_server.py
-    healthCheckPath: /health
+    buildCommand: python -m unittest test_chat -v
+    startCommand: python chat_server.py
     autoDeploy: false
+    healthCheckPath: /health

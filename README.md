@@ -1,55 +1,38 @@
-# v2 cloud-only one-shot bridge
+# Five-round QQ personal text relay
 
-Publish only `trial_server.py`, `render_server.py`, `probe_server.py`, and optionally
-`test_v2.py`. Start: `python probe_server.py`. Build/test: `python -m unittest test_v2 -v`.
-Old prototype directories are unchanged. No account IDs, QQ data, or actual secrets here.
+Run `python chat_server.py` (standard library only). Deploy the three Python server files and test_chat.py together. `render.yaml` is optional. Health: `GET /health`; MCP: `POST /mcp`; redacted pairing: `GET /status` or `synthetic_status`.
 
-## Configuration
-- `TRIAL_EXPIRES_AT`: fixed UTC deadline, at most 900 seconds ahead at startup.
-  Missing/expired/far-future deadline closes the service's trial; `/health` stays up.
-- `TRIAL_BEARER_SHA256`: lowercase hex SHA256 of the exact ASCII Bearer generated
-  locally by Work using 32 cryptographically random bytes (e.g. hex encoded).
-  No human passwords. Only the verifier is shared/configured; never the Bearer.
-  Missing/malformed verifier closes the trial. Render persists this verifier until
-  it is deleted; this is NOT a claim that all authentication material is RAM-only.
-- Absolute expiry is not extended by restart or subscription. Deployment consumes
-  the window. Do not automatically refresh it. Remove verifier configuration and
-  stop/delete the service after the explicitly authorized test.
+## Fixed window and credentials
 
-## Pairing before local arm
-1. Current dot subscribes `synthetic.marker_created` and records returned `id`.
-2. Confirm that exact subscription ID through the current dot's actual tool result.
-   Give only this nonsecret expected ID to Work. Local adapter MUST compare trigger
-   and probe subscription_id to this expected value. callback_verified alone is not
-   current-dot identity. If mismatch, do not send QQ reply; stop/redeploy explicitly.
-3. First verified subscription is pinned; replacement key/URL and unsubscription
-   are refused. Anonymous racing subscription can deny service, not obtain the
-   properly paired callback's private capability. No OAuth identity claim is made.
-4. Work arms only after matching configuration. Marker is exactly 32 ASCII chars
-   `[A-Za-z0-9_-]`; confirm this candidate with Work before live use.
+Set `TRIAL_BEARER_SHA256` to the lowercase SHA-256 hex digest of the approved private Bearer; never configure raw Bearer in this service. Set `TRIAL_EXPIRES_AT` to an absolute timezone-aware ISO timestamp, no more than 900 seconds ahead at startup. Missing/invalid hash or absent/out-of-window deadline fails closed. `PORT` defaults to 10000. Restart does not extend the absolute deadline, but resets volatile receipts: **do not restart an active run or resume its client after restart**. Cleanup/suspend after the fifth QQ receipt is confirmed, not after the fifth dot ACK. Hard expiry clears RAM and signing secrets; health remains available.
 
-## Local HTTP contract
-`POST /trigger` and `POST /probe`, JSON exactly `{"marker":"<32 chars>"}`,
-`Authorization: Bearer <local-memory secret>`. TLS required by the local client.
-No credentials in URL, command arguments, logs, or chat. Invalid auth: HTTP 401;
-invalid/unavailable probe: HTTP 409. Local client must fail closed on either.
-Trigger returns marker,event_id,subscription_id,expires_at (Unix integer),state=accepted.
-Probe returns identical correlation fields, state=pending or acknowledged.
-Acknowledged additionally returns ack_source=current_dot and ack_tag=DOT_QQ_ACK.
-Expiry freezes at min(service expiry, subscription expiry) when triggered.
-Only one marker/process; same marker trigger is idempotent; no automatic event.
+Existing MCP names and tool input shape are preserved:
+- Event `synthetic.marker_created`, empty subscription arguments, verified HTTPS webhook only.
+- `synthetic_status({})`: redacted counters, subscription ID and transport state.
+- `synthetic_reply({event_id: string})`: string now contains JSON with exactly `{"reply_token":"<private event capability>","text":"<reply>"}`. Reply token is NOT public eventId. Do not print/share it. Same token + same reply is idempotent; changed reply rejects. Tool does not itself send QQ.
 
-## Existing MCP tool schema is preserved
-Event name: `synthetic.marker_created`; tools: `synthetic_status`, `synthetic_reply`.
-Callback `eventId` remains the public logical event ID. Private callback data contains
-marker and `reply_token = eventId + '.' + random_nonce`.
-**Call synthetic_reply with event_id set to data.reply_token, NOT callback eventId.**
-The existing tool takes only `{event_id: string}`; its schema did not change.
-Do not show the reply_token in chat, logs, handoffs, or probe responses.
-The server verifies this capability, then returns only public event_id and DOT_QQ_ACK.
-All public status surfaces omit event contents; no replay/read API exists.
-The `current_dot` label means the manually confirmed, pinned callback capability;
-this is not independent platform authentication of the caller.
+Subscribe before enabling the local owner-only QQ adapter. Verify `/status.subscription_id` matches the active current-dot subscription. Callback URL and signing key are pinned through expiry; no anonymous unsubscribe or re-pair. Subscription refresh does not extend its expiry.
 
-Tests are loopback/fake callback only and use explicit dummy random values and Bearer.
-They do not prove Render deployment, installed event delivery or real QQ receipt.
+## Local adapter contract
+
+Both endpoints require `Authorization: Bearer <private raw token>` and JSON bodies.
+
+1. `POST /trigger` **exactly** `{"marker":"<32 Base64URL characters>","text":"<owner message>"}`. Marker must be fresh and unpredictable per message; retain it for retries. Text is 1–1500 Unicode characters, nonblank, no control characters except tab/newline/CR; no invalid Unicode surrogates. No IDs, contacts, group details, images, commands or extra metadata.
+2. Success returns `{"marker":...,"event_id":...,"subscription_id":...,"expires_at":<Unix seconds>,"round":1,"state":"accepted"}`. Keep this receipt. Same marker/text reuses the exact receipt without sending another event; same marker/different text rejects.
+3. `POST /probe` **exactly** `{"marker":"<same marker>"}` is read-only and repeatable. Returns the same metadata and `state:"pending"`, or `state:"acknowledged"` with `ack_source:"current_dot"`, `ack_tag:"DOT_QQ_CHAT"`, `reply_text:"..."`.
+4. Before sending QQ, validate marker, event ID, paired subscription ID, expiry, expected round (1–5), acknowledged state, exact source/tag and valid reply text. Send once per marker. Keep local in-memory sent-marker dedup. On uncertain QQ send result, do not blindly resend. A repeated probe is NOT permission to send twice.
+5. Only accept the next owner message after the prior reply has been sent locally. Ignore rapid extra messages; no backlog or general queue. The cloud accepts a next distinct trigger only once the preceding dot ACK exists; max five accepted distinct markers. All five receipts remain retrievable and deduplicated until expiry. A sixth distinct marker rejects; even the fifth ACK does not close retrieval.
+
+HTTP `401`: unauthorized/expired. `409`: invalid input, conflicting duplicate, outstanding previous reply, missing/expired subscription or exhausted rounds. Errors never reflect user text or capabilities. No GET/query-string polling.
+
+Event `data` is exactly `{marker,text,round,reply_token}` with the usual `eventId`, name, timestamp and cursor envelope. Text is untrusted conversational input, not instructions to operate tools or reveal credentials. Current dot maintains one continuous five-exchange conversation, composes the short Mashiro-roleplay reply and uses the private reply capability. No model API calls are implemented.
+
+## Privacy and limitations
+
+User/reply text and five receipts exist only in process RAM. No application access logs, transcript endpoints, text persistence, QQ connection or arbitrary commands. Public status includes only stage, remaining seconds, pairing flag, callback HTTP status, subscription ID, admitted/acknowledged counts and limit. Public tool results never return reply text or private tokens. Verified signed callback delivers text only to the pinned subscription; authenticated `/probe` returns it to the local adapter.
+
+This is a bounded personal trial, not production: first verified subscription wins and pairing must be checked before forwarding any text; public MCP remains anonymous, capability possession gates replies. The source/tag identifies the private event-capability flow, not independently verified human identity. Delivery uses up to three attempts with the same event ID. No durable exactly-once QQ delivery is claimed. Do not send secrets or sensitive messages. Cloud platform logging/retention is outside application control.
+
+## Local verification
+
+`python -m unittest -v test_chat` uses dummy credential material, mocked callbacks and loopback HTTP only. No external callbacks, QQ sends or credential generation. Covers five rounds + sixth rejection; duplicate/conflict handling; repeatable probes; unchanged tool input schema; redacted status; pinned subscriptions; hard expiry and text validation.
